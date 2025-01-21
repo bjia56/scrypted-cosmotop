@@ -1,3 +1,4 @@
+import json
 import os
 import platform
 import shutil
@@ -7,10 +8,11 @@ import urllib.request
 import scrypted_sdk
 from scrypted_sdk import ScryptedDeviceBase, DeviceProvider, StreamService, TTYSettings
 
+VERSON_JSON = open(os.path.join(os.environ['SCRYPTED_PLUGIN_VOLUME'], 'zip', 'unzipped', 'fs', 'cosmotop.json')).read()
 
-COSMOTOP_VERSION = "v0.3.0"
+COSMOTOP_VERSION = json.loads(VERSON_JSON)['version']
 COSMOTOP_DOWNLOAD = f"https://github.com/bjia56/cosmotop/releases/download/{COSMOTOP_VERSION}/cosmotop.exe"
-DOWNLOAD_CACHE_BUST = f"{platform.system()}-{platform.machine()}-20250119-0"
+DOWNLOAD_CACHE_BUST = f"{platform.system()}-{platform.machine()}-20250121-0"
 
 APE_ARM64 = "https://cosmo.zip/pub/cosmos/bin/ape-arm64.elf"
 APE_X86_64 = "https://cosmo.zip/pub/cosmos/bin/ape-x86_64.elf"
