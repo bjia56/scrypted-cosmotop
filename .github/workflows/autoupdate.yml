@@ -40,7 +40,7 @@ jobs:
 
           sed -i 's/${{ env.current }}/${{ env.latest }}/g' fs/cosmotop.json
           git add fs/cosmotop.json
-          git commit -m "Update `cosmotop` to ${{ env.latest }}"
+          git commit -m "Update cosmotop to ${{ env.latest }}"
 
           npm i
           npm version patch
