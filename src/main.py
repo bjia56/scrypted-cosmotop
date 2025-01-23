@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import platform
@@ -6,7 +7,8 @@ from typing import Any, AsyncGenerator, Callable
 import urllib.request
 
 import scrypted_sdk
-from scrypted_sdk import ScryptedDeviceBase, DeviceProvider, StreamService, TTYSettings
+from scrypted_sdk import ScryptedDeviceBase, DeviceProvider, StreamService, TTYSettings, ScryptedDeviceType, ScryptedInterface, Settings, Setting, Readme, Scriptable, ScriptSource
+
 
 VERSON_JSON = open(os.path.join(os.environ['SCRYPTED_PLUGIN_VOLUME'], 'zip', 'unzipped', 'fs', 'cosmotop.json')).read()
 
@@ -21,16 +23,30 @@ APE_MACOS_X86_64 = "https://cosmo.zip/pub/cosmos/bin/ape-x86_64.macho"
 FILES_PATH = os.path.join(os.environ['SCRYPTED_PLUGIN_VOLUME'], 'files')
 CACHEBUST_PATH = os.path.join(FILES_PATH, 'cachebust')
 
+# fill this in with the system APE loader
+COMPAT_SCRIPT = """#!/bin/sh
+SCRIPTPATH="$( cd -- "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+exec $SCRIPTPATH/{} $SCRIPTPATH/cosmotop.exe "$@"
+"""
 
-class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSettings):
+
+class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSettings, Settings):
     def __init__(self, nativeId: str = None) -> None:
         super().__init__(nativeId)
+        self.config = None
+        self.thememanager = None
+        self.downloaded = asyncio.ensure_future(self.do_download())
+        self.discovered = asyncio.ensure_future(self.do_device_discovery())
 
-        if self.shouldDownloadCosmotop():
-            shutil.rmtree(FILES_PATH, ignore_errors=True)
-
-        self.downloadFile(COSMOTOP_DOWNLOAD, 'cosmotop.exe')
+    async def do_download(self) -> None:
         self.exe = os.path.join(os.environ['SCRYPTED_PLUGIN_VOLUME'], 'files', 'cosmotop.exe')
+        self.compat_exe = os.path.join(os.environ['SCRYPTED_PLUGIN_VOLUME'], 'files', 'cosmotop')
+
+        if not self.shouldDownloadCosmotop():
+            return
+
+        shutil.rmtree(FILES_PATH, ignore_errors=True)
+        self.downloadFile(COSMOTOP_DOWNLOAD, 'cosmotop.exe')
 
         if platform.system() != 'Windows':
             download = None
@@ -52,8 +68,19 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
                 self.ape = None
 
             os.chmod(self.exe, 0o755)
+
+            if self.ape:
+                with open(self.compat_exe, 'w') as f:
+                    f.write(COMPAT_SCRIPT.format(os.path.basename(self.ape)))
+                os.chmod(self.compat_exe, 0o755)
+            else:
+                os.link(self.exe, self.compat_exe)
         else:
             self.ape = None
+            self.compat_exe = self.exe
+
+        with open(CACHEBUST_PATH, 'w') as f:
+            f.write(DOWNLOAD_CACHE_BUST)
 
     def shouldDownloadCosmotop(self) -> bool:
         try:
@@ -68,7 +95,7 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
         try:
             fullpath = os.path.join(FILES_PATH, filename)
             if os.path.exists(fullpath):
-                return fullpath
+                raise Exception(f"{fullpath} already exists")
             tmp = fullpath + '.tmp'
             print("Creating directory for", tmp)
             os.makedirs(os.path.dirname(fullpath), exist_ok=True)
@@ -90,8 +117,6 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
                 os.remove(tmp)
             else:
                 os.rename(tmp, fullpath)
-            with open(CACHEBUST_PATH, 'w') as f:
-                f.write(DOWNLOAD_CACHE_BUST)
             return fullpath
         except:
             print("Error downloading", url)
@@ -99,8 +124,37 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
             traceback.print_exc()
             raise
 
+    async def do_device_discovery(self) -> None:
+        await self.downloaded
+        await scrypted_sdk.deviceManager.onDeviceDiscovered({
+            "nativeId": "config",
+            "name": "Configuration",
+            "type": ScryptedDeviceType.API.value,
+            "interfaces": [
+                ScryptedInterface.Readme.value,
+                ScryptedInterface.Scriptable.value,
+            ],
+        })
+        await scrypted_sdk.deviceManager.onDeviceDiscovered({
+            "nativeId": "thememanager",
+            "name": "Theme Manager",
+            "type": ScryptedDeviceType.API.value,
+            "interfaces": [
+                ScryptedInterface.Readme.value,
+                ScryptedInterface.Settings.value,
+            ],
+        })
 
     async def getDevice(self, nativeId: str) -> Any:
+        if nativeId == "config":
+            if not self.config:
+                self.config = CosmotopConfig(nativeId, self)
+            return self.config
+        if nativeId == "thememanager":
+            if not self.thememanager:
+                self.thememanager = CosmotopThemeManager(nativeId, self)
+            return self.thememanager
+
         # Management ui v2's PtyComponent expects the plugin device to implement
         # DeviceProvider and return the StreamService device via getDevice.
         return self
@@ -109,18 +163,258 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
         core = scrypted_sdk.systemManager.getDeviceByName("@scrypted/core")
         termsvc = await core.getDevice("terminalservice")
         termsvc_direct = await scrypted_sdk.sdk.connectRPCObject(termsvc)
-        if self.ape:
-            return await termsvc_direct.connectStream(input, {
-                'cmd': [self.ape, self.exe, '--utf-force'],
-            })
         return await termsvc_direct.connectStream(input, {
-            'cmd': [self.exe, '--utf-force'],
+            'cmd': [self.compat_exe, '--utf-force'],
         })
 
     async def getTTYSettings(self) -> Any:
         return {
             "paths": [os.path.dirname(self.exe)],
         }
+
+    async def getSettings(self) -> list[Setting]:
+        await self.downloaded
+
+        config = await self.getDevice("config")
+        await config.config_reconciled
+
+        return [
+            {
+                "key": "cosmotop_executable",
+                "title": "cosmotop.exe Path",
+                "description": "Path to the downloaded cosmotop.exe.",
+                "value": self.exe,
+                "readonly": True,
+            },
+        ]
+
+    async def putSetting(self, key: str, value: str) -> None:
+        pass
+
+
+class CosmotopConfig(ScryptedDeviceBase, Scriptable, Readme):
+    CONFIG_PATH = os.path.expanduser(f'~/.config/cosmotop/cosmotop.conf')
+    HOME_THEMES_DIR = os.path.expanduser(f'~/.config/cosmotop/themes')
+
+    def __init__(self, nativeId: str, parent: CosmotopPlugin) -> None:
+        super().__init__(nativeId)
+        self.parent = parent
+        self.default_config = asyncio.ensure_future(self.load_default_config())
+        self.config_reconciled = asyncio.ensure_future(self.reconcile_from_disk())
+        self.themes = []
+
+    async def load_default_config(self) -> str:
+        await self.parent.downloaded
+        cosmotop = self.parent.compat_exe
+        assert cosmotop is not None
+
+        child = await asyncio.create_subprocess_exec(cosmotop, '--show-defaults', stdout=asyncio.subprocess.PIPE)
+        stdout, _ = await child.communicate()
+
+        return stdout.decode()
+
+    async def reconcile_from_disk(self) -> None:
+        await self.parent.downloaded
+
+        thememanager = await self.parent.getDevice('thememanager')
+        await thememanager.themes_loaded
+
+        try:
+            cosmotop = self.parent.compat_exe
+            assert cosmotop is not None
+
+            if not os.path.exists(CosmotopConfig.CONFIG_PATH):
+                os.makedirs(os.path.dirname(CosmotopConfig.CONFIG_PATH), exist_ok=True)
+                with open(CosmotopConfig.CONFIG_PATH, 'w') as f:
+                    f.write(await self.default_config)
+            self.print(f"Using config file: {CosmotopConfig.CONFIG_PATH}")
+
+            with open(CosmotopConfig.CONFIG_PATH) as f:
+                data = f.read()
+
+            while self.storage is None:
+                await asyncio.sleep(1)
+
+            if self.storage.getItem('config') and data != await self.get_config():
+                with open(CosmotopConfig.CONFIG_PATH, 'w') as f:
+                    f.write(await self.get_config())
+
+            if not self.storage.getItem('config'):
+                self.storage.setItem('config', data)
+
+            self.print(f"Using themes dir: {CosmotopConfig.HOME_THEMES_DIR}")
+            child = await asyncio.create_subprocess_exec(cosmotop, '--show-themes', stdout=asyncio.subprocess.PIPE)
+            stdout, _ = await child.communicate()
+            self.system_themes = []
+            self.bundled_themes = []
+            self.user_themes = []
+            loading_themes_to = None
+            for line in stdout.decode().splitlines():
+                if "System themes:" in line:
+                    loading_themes_to = self.system_themes
+                elif "Bundled themes:" in line:
+                    loading_themes_to = self.bundled_themes
+                elif "User themes:" in line:
+                    loading_themes_to = self.user_themes
+                elif loading_themes_to is not None and line.strip():
+                    loading_themes_to.append(line.strip())
+
+            await self.onDeviceEvent(ScryptedInterface.Readme.value, None)
+            await self.onDeviceEvent(ScryptedInterface.Scriptable.value, None)
+        except:
+            import traceback
+            traceback.print_exc()
+
+    async def get_config(self) -> str:
+        if self.storage:
+            return self.storage.getItem('config') or await self.default_config
+        return await self.default_config
+
+    async def eval(self, source: ScriptSource, variables: Any = None) -> Any:
+        raise Exception("cosmotop configuration cannot be evaluated")
+
+    async def loadScripts(self) -> Any:
+        await self.config_reconciled
+
+        return {
+            "cosmotop.conf": {
+                "name": "cosmotop Configuration",
+                "script": await self.get_config(),
+                "language": "ini",
+            }
+        }
+
+    async def saveScript(self, script: ScriptSource) -> None:
+        await self.config_reconciled
+
+        self.storage.setItem('config', script['script'])
+        await self.onDeviceEvent(ScryptedInterface.Scriptable.value, None)
+
+        updated = False
+        with open(CosmotopConfig.CONFIG_PATH) as f:
+            if f.read() != script['script']:
+                updated = True
+
+        if updated:
+            if not script['script']:
+                os.remove(CosmotopConfig.CONFIG_PATH)
+            else:
+                with open(CosmotopConfig.CONFIG_PATH, 'w') as f:
+                    f.write(script['script'])
+
+            self.print("Configuration updated, will restart...")
+            await scrypted_sdk.deviceManager.requestRestart()
+
+    async def getReadmeMarkdown(self) -> str:
+        await self.config_reconciled
+        return f"""
+# `cosmotop` Configuration
+
+## Available themes
+
+Additional themes can be downloaded from the theme manager page.
+
+<u>System themes</u>:
+{'\n'.join(['- ' + theme for theme in self.system_themes])}
+
+<u>Bundled themes</u>:
+{'\n'.join(['- ' + theme for theme in self.bundled_themes])}
+
+<u>User themes</u>:
+{'\n'.join(['- ' + theme for theme in self.user_themes])}
+"""
+
+
+class DownloaderBase(ScryptedDeviceBase):
+    def __init__(self, nativeId: str | None = None):
+        super().__init__(nativeId)
+
+    def downloadFile(self, url: str, filename: str):
+        try:
+            filesPath = os.path.join(os.environ['SCRYPTED_PLUGIN_VOLUME'], 'files')
+            fullpath = os.path.join(filesPath, filename)
+            if os.path.isfile(fullpath):
+                return fullpath
+            tmp = fullpath + '.tmp'
+            self.print("Creating directory for", tmp)
+            os.makedirs(os.path.dirname(fullpath), exist_ok=True)
+            self.print("Downloading", url)
+            response = urllib.request.urlopen(url)
+            if response.getcode() is not None and response.getcode() < 200 or response.getcode() >= 300:
+                raise Exception(f"Error downloading")
+            read = 0
+            with open(tmp, "wb") as f:
+                while True:
+                    data = response.read(1024 * 1024)
+                    if not data:
+                        break
+                    read += len(data)
+                    self.print("Downloaded", read, "bytes")
+                    f.write(data)
+            os.rename(tmp, fullpath)
+            return fullpath
+        except:
+            self.print("Error downloading", url)
+            import traceback
+            traceback.print_exc()
+            raise
+
+
+class CosmotopThemeManager(DownloaderBase, Settings, Readme):
+    LOCAL_THEME_DIR = os.path.expanduser(f'~/.config/cosmotop/themes')
+
+    def __init__(self, nativeId: str, parent: CosmotopPlugin) -> None:
+        super().__init__(nativeId)
+        self.parent = parent
+        self.themes_loaded = asyncio.ensure_future(self.load_themes())
+
+    async def load_themes(self) -> None:
+        self.print("Using themes dir:", CosmotopThemeManager.LOCAL_THEME_DIR)
+        os.makedirs(CosmotopThemeManager.LOCAL_THEME_DIR, exist_ok=True)
+        try:
+            urls = self.theme_urls
+            for url in urls:
+                filename = url.split('/')[-1]
+                fullpath = self.downloadFile(url, filename)
+                target = os.path.join(CosmotopThemeManager.LOCAL_THEME_DIR, filename)
+                shutil.copyfile(fullpath, target)
+                self.print("Installed", target)
+        except:
+            import traceback
+            traceback.print_exc()
+
+    @property
+    def theme_urls(self) -> list[str]:
+        if self.storage:
+            urls = self.storage.getItem('theme_urls')
+            if urls:
+                return json.loads(urls)
+        return []
+
+    async def getSettings(self) -> list[Setting]:
+        return [
+            {
+                "key": "theme_urls",
+                "title": "Theme URLs",
+                "description": f"List of URLs to download themes from. Themes will be downloaded to {CosmotopThemeManager.LOCAL_THEME_DIR}.",
+                "value": self.theme_urls,
+                "multiple": True,
+            },
+        ]
+
+    async def putSetting(self, key: str, value: str, forward=True) -> None:
+        self.storage.setItem(key, json.dumps(value))
+        await self.onDeviceEvent(ScryptedInterface.Settings.value, None)
+
+        self.print("Themes updated, will restart...")
+        await scrypted_sdk.deviceManager.requestRestart()
+
+    async def getReadmeMarkdown(self) -> str:
+        return f"""
+# Theme Manager
+
+List themes to download and install in the local theme directory. Themes will be installed to `{CosmotopThemeManager.LOCAL_THEME_DIR}`.
+"""
 
 
 def create_scrypted_plugin():
