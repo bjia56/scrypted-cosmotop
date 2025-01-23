@@ -1,6 +1,6 @@
 {
    "name": "@scrypted/cosmotop",
-   "version": "0.0.4",
+   "version": "0.0.5",
    "description": "cosmotop monitoring interface for Scrypted",
    "license": "Apache",
    "keywords": [
@@ -24,6 +24,9 @@
    "scrypted": {
       "name": "cosmotop",
       "runtime": "python",
+      "pythonVersion": {
+         "default": "3.12"
+      },
       "type": "API",
       "interfaces": [
          "DeviceProvider",
