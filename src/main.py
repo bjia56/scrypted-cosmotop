@@ -74,7 +74,7 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
                     f.write(COMPAT_SCRIPT.format(os.path.basename(self.ape)))
                 os.chmod(self.compat_exe, 0o755)
             else:
-                os.link(self.exe, self.compat_exe)
+                os.symlink(self.exe, self.compat_exe)
         else:
             self.ape = None
             self.compat_exe = self.exe
