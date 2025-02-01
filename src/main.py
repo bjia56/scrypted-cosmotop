@@ -14,7 +14,7 @@ VERSON_JSON = open(os.path.join(os.environ['SCRYPTED_PLUGIN_VOLUME'], 'zip', 'un
 
 COSMOTOP_VERSION = json.loads(VERSON_JSON)['version']
 COSMOTOP_DOWNLOAD = f"https://github.com/bjia56/cosmotop/releases/download/{COSMOTOP_VERSION}/cosmotop.exe"
-DOWNLOAD_CACHE_BUST = f"{platform.system()}-{platform.machine()}-{COSMOTOP_VERSION}-0"
+DOWNLOAD_CACHE_BUST = f"{platform.system()}-{platform.machine()}-{COSMOTOP_VERSION}-1"
 
 APE_ARM64 = "https://cosmo.zip/pub/cosmos/bin/ape-arm64.elf"
 APE_X86_64 = "https://cosmo.zip/pub/cosmos/bin/ape-x86_64.elf"
@@ -27,6 +27,11 @@ CACHEBUST_PATH = os.path.join(FILES_PATH, 'cachebust')
 COMPAT_SCRIPT = """#!/bin/sh
 SCRIPTPATH="$( cd -- "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
 exec $SCRIPTPATH/{} $SCRIPTPATH/cosmotop.exe "$@"
+"""
+
+COMPAT_SCRIPT_MAC_ARM64 = """#!/bin/sh
+SCRIPTPATH="$( cd -- "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+exec $SCRIPTPATH/cosmotop.exe "$@"
 """
 
 
@@ -74,7 +79,9 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
                     f.write(COMPAT_SCRIPT.format(os.path.basename(self.ape)))
                 os.chmod(self.compat_exe, 0o755)
             else:
-                os.symlink(self.exe, self.compat_exe)
+                with open(self.compat_exe, 'w') as f:
+                    f.write(COMPAT_SCRIPT_MAC_ARM64)
+                os.chmod(self.compat_exe, 0o755)
         else:
             self.ape = None
             self.compat_exe = self.exe
