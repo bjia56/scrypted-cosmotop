@@ -168,7 +168,7 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
                     continue
                 devices.append({
                     "nativeId": worker_id,
-                    "name": worker['name'],
+                    "name": "cosmotop on " + worker['name'],
                     "type": ScryptedDeviceType.API.value,
                     "interfaces": [
                         ScryptedInterface.StreamService.value,
@@ -288,6 +288,9 @@ class CosmotopConfig(ScryptedDeviceBase, Scriptable, Readme):
                     with open(CosmotopConfig.CONFIG_PATH, 'w') as f:
                         f.write(await cluster_parent_config.get_config())
             else:
+                while self.storage is None:
+                    await asyncio.sleep(1)
+
                 if self.storage.getItem('config') and data != await self.get_config():
                     with open(CosmotopConfig.CONFIG_PATH, 'w') as f:
                         f.write(await self.get_config())
