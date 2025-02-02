@@ -36,12 +36,18 @@ exec $SCRIPTPATH/cosmotop.exe "$@"
 
 
 class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSettings, Settings):
-    def __init__(self, nativeId: str = None) -> None:
+    def __init__(self, nativeId: str = None, cluster_parent: 'CosmotopPlugin' = None) -> None:
         super().__init__(nativeId)
-        self.config = None
-        self.thememanager = None
+
         self.downloaded = asyncio.ensure_future(self.do_download())
-        self.discovered = asyncio.ensure_future(self.do_device_discovery())
+
+        self.cluster_parent = cluster_parent
+        if not cluster_parent:
+            self.discovered = asyncio.ensure_future(self.do_device_discovery())
+            self.cluster_workers = {}
+
+        self.config = CosmotopConfig("config", self)
+        self.thememanager = CosmotopThemeManager("thememanager", self)
 
     async def do_download(self) -> None:
         self.exe = os.path.join(os.environ['SCRYPTED_PLUGIN_VOLUME'], 'files', 'cosmotop.exe')
@@ -133,34 +139,67 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
 
     async def do_device_discovery(self) -> None:
         await self.downloaded
-        await scrypted_sdk.deviceManager.onDeviceDiscovered({
-            "nativeId": "config",
-            "name": "Configuration",
-            "type": ScryptedDeviceType.API.value,
-            "interfaces": [
-                ScryptedInterface.Readme.value,
-                ScryptedInterface.Scriptable.value,
-            ],
-        })
-        await scrypted_sdk.deviceManager.onDeviceDiscovered({
-            "nativeId": "thememanager",
-            "name": "Theme Manager",
-            "type": ScryptedDeviceType.API.value,
-            "interfaces": [
-                ScryptedInterface.Readme.value,
-                ScryptedInterface.Settings.value,
-            ],
+        devices = [
+            {
+                "nativeId": "config",
+                "name": "Configuration",
+                "type": ScryptedDeviceType.API.value,
+                "interfaces": [
+                    ScryptedInterface.Readme.value,
+                    ScryptedInterface.Scriptable.value,
+                ],
+            },
+            {
+                "nativeId": "thememanager",
+                "name": "Theme Manager",
+                "type": ScryptedDeviceType.API.value,
+                "interfaces": [
+                    ScryptedInterface.Readme.value,
+                    ScryptedInterface.Settings.value,
+                ],
+            }
+        ]
+
+        if scrypted_sdk.clusterManager:
+            workers = await scrypted_sdk.clusterManager.getClusterWorkers()
+            for worker_id in list(workers.keys()):
+                worker = workers[worker_id]
+                if worker['mode'] == 'server':
+                    continue
+                devices.append({
+                    "nativeId": worker_id,
+                    "name": worker['name'],
+                    "type": ScryptedDeviceType.API.value,
+                    "interfaces": [
+                        ScryptedInterface.StreamService.value,
+                        ScryptedInterface.TTY.value,
+                    ],
+                })
+
+        await scrypted_sdk.deviceManager.onDevicesChanged({
+            "devices": devices,
+            "providerNativeId": self.nativeId,
         })
 
+        if scrypted_sdk.clusterManager:
+            for worker_id in list(workers.keys()):
+                worker = workers[worker_id]
+                if worker['mode'] == 'server':
+                    continue
+                fork = scrypted_sdk.fork({ 'clusterWorkerId': worker_id })
+                result = await fork.result
+                self.cluster_workers[worker_id] = await result.newCosmotopPlugin(worker_id, self)
+
     async def getDevice(self, nativeId: str) -> Any:
+        await self.discovered
+
         if nativeId == "config":
-            if not self.config:
-                self.config = CosmotopConfig(nativeId, self)
             return self.config
         if nativeId == "thememanager":
-            if not self.thememanager:
-                self.thememanager = CosmotopThemeManager(nativeId, self)
             return self.thememanager
+
+        if nativeId in self.cluster_workers:
+            return self.cluster_workers[nativeId]
 
         # Management ui v2's PtyComponent expects the plugin device to implement
         # DeviceProvider and return the StreamService device via getDevice.
@@ -169,8 +208,11 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
     async def connectStream(self, input: AsyncGenerator[Any, Any] = None, options: Any = None) -> Any:
         core = scrypted_sdk.systemManager.getDeviceByName("@scrypted/core")
         termsvc = await core.getDevice("terminalservice")
-        termsvc_direct = await scrypted_sdk.sdk.connectRPCObject(termsvc)
-        return await termsvc_direct.connectStream(input, {
+        if self.cluster_parent and scrypted_sdk.clusterManager:
+            termsvc = await termsvc.forkInterface(ScryptedInterface.StreamService.value, { 'clusterWorkerId': self.nativeId })
+        else:
+            termsvc = await scrypted_sdk.sdk.connectRPCObject(termsvc)
+        return await termsvc.connectStream(input, {
             'cmd': [self.compat_exe, '--utf-force'],
         })
 
@@ -206,10 +248,12 @@ class CosmotopConfig(ScryptedDeviceBase, Scriptable, Readme):
     def __init__(self, nativeId: str, parent: CosmotopPlugin) -> None:
         super().__init__(nativeId)
         self.parent = parent
+        self.cluster_parent_config = asyncio.ensure_future(parent.cluster_parent.getDevice("config")) if parent.cluster_parent else None
         self.default_config = asyncio.ensure_future(self.load_default_config())
         self.config_reconciled = asyncio.ensure_future(self.reconcile_from_disk())
         self.themes = []
 
+    # can be called from forks
     async def load_default_config(self) -> str:
         await self.parent.downloaded
         cosmotop = self.parent.compat_exe
@@ -220,11 +264,10 @@ class CosmotopConfig(ScryptedDeviceBase, Scriptable, Readme):
 
         return stdout.decode()
 
+    # can be called from forks
     async def reconcile_from_disk(self) -> None:
         await self.parent.downloaded
-
-        thememanager = await self.parent.getDevice('thememanager')
-        await thememanager.themes_loaded
+        await self.parent.thememanager.themes_loaded
 
         try:
             cosmotop = self.parent.compat_exe
@@ -239,47 +282,55 @@ class CosmotopConfig(ScryptedDeviceBase, Scriptable, Readme):
             with open(CosmotopConfig.CONFIG_PATH) as f:
                 data = f.read()
 
-            while self.storage is None:
-                await asyncio.sleep(1)
+            if self.cluster_parent_config is not None:
+                cluster_parent_config = await self.cluster_parent_config
+                if data != await cluster_parent_config.get_config():
+                    with open(CosmotopConfig.CONFIG_PATH, 'w') as f:
+                        f.write(await cluster_parent_config.get_config())
+            else:
+                if self.storage.getItem('config') and data != await self.get_config():
+                    with open(CosmotopConfig.CONFIG_PATH, 'w') as f:
+                        f.write(await self.get_config())
 
-            if self.storage.getItem('config') and data != await self.get_config():
-                with open(CosmotopConfig.CONFIG_PATH, 'w') as f:
-                    f.write(await self.get_config())
+                if not self.storage.getItem('config'):
+                    self.storage.setItem('config', data)
 
-            if not self.storage.getItem('config'):
-                self.storage.setItem('config', data)
+                self.print(f"Using themes dir: {CosmotopConfig.HOME_THEMES_DIR}")
+                child = await asyncio.create_subprocess_exec(cosmotop, '--show-themes', stdout=asyncio.subprocess.PIPE)
+                stdout, _ = await child.communicate()
+                self.system_themes = []
+                self.bundled_themes = []
+                self.user_themes = []
+                loading_themes_to = None
+                for line in stdout.decode().splitlines():
+                    if "System themes:" in line:
+                        loading_themes_to = self.system_themes
+                    elif "Bundled themes:" in line:
+                        loading_themes_to = self.bundled_themes
+                    elif "User themes:" in line:
+                        loading_themes_to = self.user_themes
+                    elif loading_themes_to is not None and line.strip():
+                        loading_themes_to.append(line.strip())
 
-            self.print(f"Using themes dir: {CosmotopConfig.HOME_THEMES_DIR}")
-            child = await asyncio.create_subprocess_exec(cosmotop, '--show-themes', stdout=asyncio.subprocess.PIPE)
-            stdout, _ = await child.communicate()
-            self.system_themes = []
-            self.bundled_themes = []
-            self.user_themes = []
-            loading_themes_to = None
-            for line in stdout.decode().splitlines():
-                if "System themes:" in line:
-                    loading_themes_to = self.system_themes
-                elif "Bundled themes:" in line:
-                    loading_themes_to = self.bundled_themes
-                elif "User themes:" in line:
-                    loading_themes_to = self.user_themes
-                elif loading_themes_to is not None and line.strip():
-                    loading_themes_to.append(line.strip())
-
-            await self.onDeviceEvent(ScryptedInterface.Readme.value, None)
-            await self.onDeviceEvent(ScryptedInterface.Scriptable.value, None)
+                await self.onDeviceEvent(ScryptedInterface.Readme.value, None)
+                await self.onDeviceEvent(ScryptedInterface.Scriptable.value, None)
         except:
             import traceback
             traceback.print_exc()
 
+    # can be called from forks
     async def get_config(self) -> str:
+        if self.cluster_parent_config is not None:
+            return await (await self.cluster_parent_config).get_config()
         if self.storage:
             return self.storage.getItem('config') or await self.default_config
         return await self.default_config
 
+    # should only be called on the primary plugin instance
     async def eval(self, source: ScriptSource, variables: Any = None) -> Any:
         raise Exception("cosmotop configuration cannot be evaluated")
 
+    # should only be called on the primary plugin instance
     async def loadScripts(self) -> Any:
         await self.config_reconciled
 
@@ -291,6 +342,7 @@ class CosmotopConfig(ScryptedDeviceBase, Scriptable, Readme):
             }
         }
 
+    # should only be called on the primary plugin instance
     async def saveScript(self, script: ScriptSource) -> None:
         await self.config_reconciled
 
@@ -312,6 +364,7 @@ class CosmotopConfig(ScryptedDeviceBase, Scriptable, Readme):
             self.print("Configuration updated, will restart...")
             await scrypted_sdk.deviceManager.requestRestart()
 
+    # should only be called on the primary plugin instance
     async def getReadmeMarkdown(self) -> str:
         await self.config_reconciled
         return f"""
@@ -373,13 +426,15 @@ class CosmotopThemeManager(DownloaderBase, Settings, Readme):
     def __init__(self, nativeId: str, parent: CosmotopPlugin) -> None:
         super().__init__(nativeId)
         self.parent = parent
+        self.cluster_parent_thememanager = asyncio.ensure_future(parent.cluster_parent.getDevice("thememanager")) if parent.cluster_parent else None
         self.themes_loaded = asyncio.ensure_future(self.load_themes())
 
+    # can be called from forks
     async def load_themes(self) -> None:
         self.print("Using themes dir:", CosmotopThemeManager.LOCAL_THEME_DIR)
         os.makedirs(CosmotopThemeManager.LOCAL_THEME_DIR, exist_ok=True)
         try:
-            urls = self.theme_urls
+            urls = await self.theme_urls()
             for url in urls:
                 filename = url.split('/')[-1]
                 fullpath = self.downloadFile(url, filename)
@@ -390,25 +445,29 @@ class CosmotopThemeManager(DownloaderBase, Settings, Readme):
             import traceback
             traceback.print_exc()
 
-    @property
-    def theme_urls(self) -> list[str]:
+    # can be called from forks
+    async def theme_urls(self) -> list[str]:
+        if self.cluster_parent_thememanager is not None:
+            return await (await self.cluster_parent_thememanager).theme_urls()
         if self.storage:
             urls = self.storage.getItem('theme_urls')
             if urls:
                 return json.loads(urls)
         return []
 
+    # should only be called on the primary plugin instance
     async def getSettings(self) -> list[Setting]:
         return [
             {
                 "key": "theme_urls",
                 "title": "Theme URLs",
                 "description": f"List of URLs to download themes from. Themes will be downloaded to {CosmotopThemeManager.LOCAL_THEME_DIR}.",
-                "value": self.theme_urls,
+                "value": await self.theme_urls(),
                 "multiple": True,
             },
         ]
 
+    # should only be called on the primary plugin instance
     async def putSetting(self, key: str, value: str, forward=True) -> None:
         self.storage.setItem(key, json.dumps(value))
         await self.onDeviceEvent(ScryptedInterface.Settings.value, None)
@@ -416,6 +475,7 @@ class CosmotopThemeManager(DownloaderBase, Settings, Readme):
         self.print("Themes updated, will restart...")
         await scrypted_sdk.deviceManager.requestRestart()
 
+    # should only be called on the primary plugin instance
     async def getReadmeMarkdown(self) -> str:
         return f"""
 # Theme Manager
@@ -426,3 +486,12 @@ List themes to download and install in the local theme directory. Themes will be
 
 def create_scrypted_plugin():
     return CosmotopPlugin()
+
+
+class CosmotopForkEntry:
+    async def newCosmotopPlugin(self, nativeId: str = None, cluster_parent: CosmotopPlugin = None):
+        return CosmotopPlugin(nativeId=nativeId, cluster_parent=cluster_parent)
+
+
+async def fork():
+    return CosmotopForkEntry()
