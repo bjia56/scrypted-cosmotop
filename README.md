@@ -16,7 +16,7 @@ Monitoring of GPUs is supported on Linux and Windows.
 - Windows: LibreHardwareMonitor is included with `cosmotop` and automatically used to fetch GPU information.
 - Linux: Intel, AMD, and NVIDIA GPUs are supported, provided the appropriate driver is installed, and the following:
   - Intel: The simplest setup is to run Scrypted as root (if using a local install) or in a privileged container (if using Docker or LXC), however this is <u>*insecure and not recommended*</u>. Instead, run [intel-gpu-exporter](https://github.com/bjia56/intel-gpu-exporter) in a privileged Docker container, then set the `intel_gpu_exporter` configuration option in `cosmotop` to the exporter's HTTP endpoint.
-  - AMD: `librocm_smi64.so` must be accessible by Scrypted.
+  - AMD: Should work out of the box.
   - NVIDIA: `libnvidia-ml.so` must be accessible by Scrypted.
 
 ### NPU monitoring
@@ -24,6 +24,8 @@ Monitoring of GPUs is supported on Linux and Windows.
 Utilization monitoring of Intel and Rockchip NPUs is supported on Linux, provided the following:
 - Intel: The path `/sys/devices/pci0000:00/0000:00:0b.0` must be readable by Scrypted.
 - Rockchip: The path `/sys/kernel/debug/rknpu` must be readable by Scrypted.
+
+The Apple Neural Engine on M series Macs is supported and detected as an NPU.
 
 ### Themes
 
