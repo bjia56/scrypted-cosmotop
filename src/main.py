@@ -211,6 +211,7 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
                     "interfaces": [
                         ScryptedInterface.StreamService.value,
                         ScryptedInterface.TTY.value,
+                        ScryptedInterface.Settings.value,
                     ],
                 })
 
@@ -261,9 +262,7 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
 
     async def getSettings(self) -> list[Setting]:
         await self.downloaded
-
-        config = await self.getDevice("config")
-        await config.config_reconciled
+        await self.config.config_reconciled
 
         return [
             {
