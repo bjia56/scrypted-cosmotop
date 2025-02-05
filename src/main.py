@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import os
 import platform
@@ -61,6 +62,10 @@ async def tail_f(file_path, check_interval=1):
             await asyncio.sleep(check_interval)
 
 
+def name_hash(name):
+    return hashlib.sha1(name.encode()).hexdigest()
+
+
 class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSettings, Settings):
     LOG_FILE = os.path.expanduser(f'~/.config/cosmotop/cosmotop.log')
 
@@ -74,9 +79,13 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
         if not cluster_parent:
             self.discovered = asyncio.ensure_future(self.do_device_discovery())
             self.cluster_workers = {}
+            self.cluster_worker_ids = {}
 
         self.config = CosmotopConfig("config", self)
         self.thememanager = CosmotopThemeManager("thememanager", self)
+
+    async def lookup_worker_id(self, stable_id):
+        return self.cluster_worker_ids[stable_id]
 
     async def do_download(self) -> None:
         self.exe = os.path.join(os.environ['SCRYPTED_PLUGIN_VOLUME'], 'files', 'cosmotop.exe')
@@ -195,8 +204,18 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
                 worker = workers[worker_id]
                 if worker['mode'] == 'server':
                     continue
+
+                stable_id_base = name_hash(worker['name']) # the worker id could change, so treat the name as stable
+                stable_id = stable_id_base
+                ctr = 1
+                while stable_id in self.cluster_worker_ids:
+                    stable_id = f"{stable_id_base}-{ctr}"
+                    ctr += 1
+
+                self.cluster_worker_ids[stable_id] = worker_id
+
                 devices.append({
-                    "nativeId": worker_id,
+                    "nativeId": stable_id,
                     "name": "cosmotop on " + worker['name'],
                     "type": ScryptedDeviceType.API.value,
                     "interfaces": [
@@ -216,9 +235,17 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
                 worker = workers[worker_id]
                 if worker['mode'] == 'server':
                     continue
+
+                # get the stable id from the map
+                stable_id = None
+                for k, v in self.cluster_worker_ids.items():
+                    if v == worker_id:
+                        stable_id = k
+                        break
+
                 fork = scrypted_sdk.fork({ 'clusterWorkerId': worker_id })
                 result = await fork.result
-                self.cluster_workers[worker_id] = await result.newCosmotopPlugin(worker_id, self)
+                self.cluster_workers[stable_id] = await result.newCosmotopPlugin(stable_id, self)
 
     async def tail_log_loop(self):
         await self.downloaded
@@ -245,7 +272,8 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
         core = scrypted_sdk.systemManager.getDeviceByName("@scrypted/core")
         termsvc = await core.getDevice("terminalservice")
         if self.cluster_parent and scrypted_sdk.clusterManager:
-            termsvc = await termsvc.forkInterface(ScryptedInterface.StreamService.value, { 'clusterWorkerId': self.nativeId })
+            worker_id = await self.cluster_parent.lookup_worker_id(self.nativeId)
+            termsvc = await termsvc.forkInterface(ScryptedInterface.StreamService.value, { 'clusterWorkerId': worker_id })
         else:
             termsvc = await scrypted_sdk.sdk.connectRPCObject(termsvc)
         return await termsvc.connectStream(input, {
