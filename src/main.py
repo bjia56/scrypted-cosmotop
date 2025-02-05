@@ -206,8 +206,10 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
                     ],
                 })
 
-        for device in devices:
-            await scrypted_sdk.deviceManager.onDeviceDiscovered(device)
+        await scrypted_sdk.deviceManager.onDevicesChanged({
+            "devices": devices,
+            "providerNativeId": self.nativeId,
+        })
 
         if scrypted_sdk.clusterManager:
             for worker_id in list(workers.keys()):
