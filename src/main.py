@@ -249,7 +249,7 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
         else:
             termsvc = await scrypted_sdk.sdk.connectRPCObject(termsvc)
         return await termsvc.connectStream(input, {
-            'cmd': [self.compat_exe, '--utf-force', '--debug'],
+            'cmd': [self.compat_exe, '--utf-force'],
         })
 
     async def getTTYSettings(self) -> Any:
