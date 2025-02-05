@@ -35,11 +35,40 @@ exec $SCRIPTPATH/cosmotop.exe "$@"
 """
 
 
+async def tail_f(file_path, check_interval=1):
+    """
+    Asynchronously tails a file like `tail -f`, yielding new content as it appears.
+
+    :param file_path: Path to the file to tail.
+    :param check_interval: Time in seconds to wait between checks for the file or new content.
+    """
+    file = None
+    while True:
+        if os.path.exists(file_path):
+            if file is None:
+                file = open(file_path, 'r')
+                # Move to the end of the file
+                file.seek(0, 2)
+            line = file.readline()
+            if line:
+                yield line
+            else:
+                await asyncio.sleep(check_interval)
+        else:
+            if file is not None:
+                file.close()
+                file = None
+            await asyncio.sleep(check_interval)
+
+
 class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSettings, Settings):
+    LOG_FILE = os.path.expanduser(f'~/.config/cosmotop/cosmotop.log')
+
     def __init__(self, nativeId: str = None, cluster_parent: 'CosmotopPlugin' = None) -> None:
         super().__init__(nativeId)
 
         self.downloaded = asyncio.ensure_future(self.do_download())
+        self.log_loop = asyncio.create_task(self.tail_log_loop())
 
         self.cluster_parent = cluster_parent
         if not cluster_parent:
@@ -191,6 +220,12 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
                 result = await fork.result
                 self.cluster_workers[worker_id] = await result.newCosmotopPlugin(worker_id, self)
 
+    async def tail_log_loop(self):
+        await self.downloaded
+        self.print("--- Tailing log file ---")
+        async for line in tail_f(CosmotopPlugin.LOG_FILE):
+            self.print(line, end='')
+
     async def getDevice(self, nativeId: str) -> Any:
         await self.discovered
 
@@ -214,7 +249,7 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
         else:
             termsvc = await scrypted_sdk.sdk.connectRPCObject(termsvc)
         return await termsvc.connectStream(input, {
-            'cmd': [self.compat_exe, '--utf-force'],
+            'cmd': [self.compat_exe, '--utf-force', '--debug'],
         })
 
     async def getTTYSettings(self) -> Any:
