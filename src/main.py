@@ -92,6 +92,9 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
         self.compat_exe = os.path.join(os.environ['SCRYPTED_PLUGIN_VOLUME'], 'files', 'cosmotop')
 
         if not self.shouldDownloadCosmotop():
+            if platform.system() == 'Windows':
+                self.ape = None
+                self.compat_exe = self.exe
             return
 
         shutil.rmtree(FILES_PATH, ignore_errors=True)
