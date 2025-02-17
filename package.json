@@ -1,6 +1,6 @@
 {
    "name": "@scrypted/cosmotop",
-   "version": "0.0.18",
+   "version": "0.0.19",
    "description": "cosmotop monitoring interface for Scrypted",
    "license": "Apache",
    "keywords": [
