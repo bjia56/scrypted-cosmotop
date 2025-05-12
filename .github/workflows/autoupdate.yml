@@ -21,7 +21,8 @@ jobs:
       - name: Check versions
         run: |
           CURRENT=$(cat fs/cosmotop.json | jq -r .version)
-          LATEST=$(curl -s -S -H "Authorization: Bearer ${{ github.token }}" https://api.github.com/repos/bjia56/cosmotop/releases | jq -r .[0].tag_name)
+          LATEST=$(curl -s -S -H "Authorization: Bearer ${{ github.token }}" \
+            https://api.github.com/repos/bjia56/cosmotop/releases/latest | jq -r .tag_name)
           echo "current=${CURRENT}" >> "$GITHUB_ENV"
           echo "latest=${LATEST}" >> "$GITHUB_ENV"
 
