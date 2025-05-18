@@ -18,13 +18,33 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check versions
+      - name: Ensure scripts directory exists
+        run: mkdir -p scripts
+
+      - name: Get latest upstream version (including prereleases)
+        id: upstream_version
         run: |
+          pip install packaging jq
+
+          # Get current version
           CURRENT=$(cat fs/cosmotop.json | jq -r .version)
-          LATEST=$(curl -s -S -H "Authorization: Bearer ${{ github.token }}" \
-            https://api.github.com/repos/bjia56/cosmotop/releases/latest | jq -r .tag_name)
+          echo "Current version: $CURRENT"
+
+          # Get all release tags from upstream
+          curl -s -H "Authorization: Bearer ${{ github.token }}" \
+            "https://api.github.com/repos/bjia56/cosmotop/releases" \
+            | jq -r '.[].tag_name' > all_tags.txt
+
+          # Call the extracted Python script
+          python3 scripts/find_latest_version.py all_tags.txt > version_output.txt
+
+          # Parse the key=value output
+          LATEST=$(grep '^LATEST=' version_output.txt | cut -d= -f2-)
+          IS_BETA=$(grep '^IS_BETA=' version_output.txt | cut -d= -f2-)
+
           echo "current=${CURRENT}" >> "$GITHUB_ENV"
           echo "latest=${LATEST}" >> "$GITHUB_ENV"
+          echo "is_beta=${IS_BETA}" >> "$GITHUB_ENV"
 
       - name: Setup NodeJS
         if: ${{ env.current != env.latest }}
@@ -39,13 +59,13 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
 
-          sed -i 's/${{ env.current }}/${{ env.latest }}/g' fs/cosmotop.json
+          sed -i "s/${{ env.current }}/${{ env.latest }}/g" fs/cosmotop.json
           git add fs/cosmotop.json
           git commit -m "Update cosmotop to ${{ env.latest }}"
 
           npm i
           npm version patch
-          npm publish
+          npm publish ${{ env.is_beta == 'true' && '--tag beta' || '' }}
 
           git push
         env:
