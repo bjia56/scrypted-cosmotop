@@ -84,6 +84,12 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
         self.config = CosmotopConfig("config", self)
         self.thememanager = CosmotopThemeManager("thememanager", self)
 
+        asyncio.create_task(self.alert("@scrypted/cosmotop is moving out of the Scrypted npm org to @bjia56/scrypted-cosmotop. Please consider switching to the new plugin. 0.0.25 will be the last version published in the Scrypted npm org."))
+
+    async def alert(self, msg) -> None:
+        logger = await scrypted_sdk.systemManager.api.getLogger(self.nativeId)
+        await logger.log("a", msg)
+
     async def lookup_worker_id(self, stable_id):
         return self.cluster_worker_ids[stable_id]
 
