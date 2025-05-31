@@ -14,26 +14,11 @@ from scrypted_sdk import ScryptedDeviceBase, DeviceProvider, StreamService, TTYS
 VERSON_JSON = open(os.path.join(os.environ['SCRYPTED_PLUGIN_VOLUME'], 'zip', 'unzipped', 'fs', 'cosmotop.json')).read()
 
 COSMOTOP_VERSION = json.loads(VERSON_JSON)['version']
-COSMOTOP_DOWNLOAD = f"https://github.com/bjia56/cosmotop/releases/download/{COSMOTOP_VERSION}/cosmotop.exe"
-DOWNLOAD_CACHE_BUST = f"{platform.system()}-{platform.machine()}-{COSMOTOP_VERSION}-1"
-
-APE_ARM64 = "https://cosmo.zip/pub/cosmos/bin/ape-arm64.elf"
-APE_X86_64 = "https://cosmo.zip/pub/cosmos/bin/ape-x86_64.elf"
-APE_MACOS_X86_64 = "https://cosmo.zip/pub/cosmos/bin/ape-x86_64.macho"
+COSMOTOP_DOWNLOAD = f"https://github.com/bjia56/cosmotop/releases/download/{COSMOTOP_VERSION}/cosmotop"
+DOWNLOAD_CACHE_BUST = f"{platform.system()}-{platform.machine()}-{COSMOTOP_VERSION}-0"
 
 FILES_PATH = os.path.join(os.environ['SCRYPTED_PLUGIN_VOLUME'], 'files')
 CACHEBUST_PATH = os.path.join(FILES_PATH, 'cachebust')
-
-# fill this in with the system APE loader
-COMPAT_SCRIPT = """#!/bin/sh
-SCRIPTPATH="$( cd -- "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
-exec $SCRIPTPATH/{} $SCRIPTPATH/cosmotop.exe "$@"
-"""
-
-COMPAT_SCRIPT_MAC_ARM64 = """#!/bin/sh
-SCRIPTPATH="$( cd -- "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
-exec $SCRIPTPATH/cosmotop.exe "$@"
-"""
 
 
 async def tail_f(file_path, check_interval=1):
@@ -92,50 +77,21 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
         return self.cluster_worker_ids[stable_id]
 
     async def do_download(self) -> None:
-        self.exe = os.path.join(os.environ['SCRYPTED_PLUGIN_VOLUME'], 'files', 'cosmotop.exe')
-        self.compat_exe = os.path.join(os.environ['SCRYPTED_PLUGIN_VOLUME'], 'files', 'cosmotop')
+        self.exe = os.path.join(os.environ['SCRYPTED_PLUGIN_VOLUME'], 'files', 'cosmotop')
 
         if not self.shouldDownloadCosmotop():
             if platform.system() == 'Windows':
-                self.ape = None
-                self.compat_exe = self.exe
+                self.exe += '.cmd'
             return
 
         shutil.rmtree(FILES_PATH, ignore_errors=True)
-        self.downloadFile(COSMOTOP_DOWNLOAD, 'cosmotop.exe')
+        self.downloadFile(COSMOTOP_DOWNLOAD, 'cosmotop')
 
         if platform.system() != 'Windows':
-            download = None
-            if platform.system() == 'Linux':
-                if platform.machine() == 'aarch64':
-                    download = APE_ARM64
-                elif platform.machine() == 'x86_64':
-                    download = APE_X86_64
-            elif platform.system() == 'Darwin':
-                if platform.machine() == 'x86_64':
-                    download = APE_MACOS_X86_64
-
-            if download:
-                filename = os.path.basename(download)
-                self.downloadFile(download, filename)
-                os.chmod(os.path.join(FILES_PATH, filename), 0o755)
-                self.ape = os.path.join(FILES_PATH, filename)
-            else:
-                self.ape = None
-
             os.chmod(self.exe, 0o755)
-
-            if self.ape:
-                with open(self.compat_exe, 'w') as f:
-                    f.write(COMPAT_SCRIPT.format(os.path.basename(self.ape)))
-                os.chmod(self.compat_exe, 0o755)
-            else:
-                with open(self.compat_exe, 'w') as f:
-                    f.write(COMPAT_SCRIPT_MAC_ARM64)
-                os.chmod(self.compat_exe, 0o755)
         else:
-            self.ape = None
-            self.compat_exe = self.exe
+            os.rename(self.exe, self.exe + '.cmd')
+            self.exe += '.cmd'
 
         with open(CACHEBUST_PATH, 'w') as f:
             f.write(DOWNLOAD_CACHE_BUST)
@@ -284,7 +240,7 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
         else:
             termsvc = await scrypted_sdk.sdk.connectRPCObject(termsvc)
         return await termsvc.connectStream(input, {
-            'cmd': [self.compat_exe, '--utf-force'],
+            'cmd': [self.exe, '--utf-force'],
         })
 
     async def getTTYSettings(self) -> Any:
@@ -299,8 +255,8 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
         return [
             {
                 "key": "cosmotop_executable",
-                "title": "cosmotop.exe Path",
-                "description": "Path to the downloaded cosmotop.exe.",
+                "title": "cosmotop Path",
+                "description": "Path to the downloaded cosmotop.",
                 "value": self.exe,
                 "readonly": True,
             },
@@ -325,10 +281,13 @@ class CosmotopConfig(ScryptedDeviceBase, Scriptable, Readme):
     # can be called from forks
     async def load_default_config(self) -> str:
         await self.parent.downloaded
-        cosmotop = self.parent.compat_exe
+        cosmotop = self.parent.exe
         assert cosmotop is not None
 
-        child = await asyncio.create_subprocess_exec(cosmotop, '--show-defaults', stdout=asyncio.subprocess.PIPE)
+        if platform.system() == 'Windows':
+            child = await asyncio.create_subprocess_exec(cosmotop, '--show-defaults', stdout=asyncio.subprocess.PIPE)
+        else:
+            child = await asyncio.create_subprocess_exec('sh', cosmotop, '--show-defaults', stdout=asyncio.subprocess.PIPE)
         stdout, _ = await child.communicate()
 
         return stdout.decode()
@@ -339,7 +298,7 @@ class CosmotopConfig(ScryptedDeviceBase, Scriptable, Readme):
         await self.parent.thememanager.themes_loaded
 
         try:
-            cosmotop = self.parent.compat_exe
+            cosmotop = self.parent.exe
             assert cosmotop is not None
 
             if not os.path.exists(CosmotopConfig.CONFIG_PATH):
@@ -368,7 +327,10 @@ class CosmotopConfig(ScryptedDeviceBase, Scriptable, Readme):
                     self.storage.setItem('config', data)
 
                 self.print(f"Using themes dir: {CosmotopConfig.HOME_THEMES_DIR}")
-                child = await asyncio.create_subprocess_exec(cosmotop, '--show-themes', stdout=asyncio.subprocess.PIPE)
+                if platform.system() == 'Windows':
+                    child = await asyncio.create_subprocess_exec(cosmotop, '--show-themes', stdout=asyncio.subprocess.PIPE)
+                else:
+                    child = await asyncio.create_subprocess_exec('sh', cosmotop, '--show-themes', stdout=asyncio.subprocess.PIPE)
                 stdout, _ = await child.communicate()
                 self.system_themes = []
                 self.bundled_themes = []
