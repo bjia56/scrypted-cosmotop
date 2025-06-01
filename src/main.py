@@ -69,6 +69,27 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
         self.config = CosmotopConfig("config", self)
         self.thememanager = CosmotopThemeManager("thememanager", self)
 
+        async def alert_migration():
+            if not cluster_parent and not self.migration_from_cosmotop_exe_alerted:
+                await self.alert(f"The cosmotop executable is now downloaded as \"cosmotop{'.cmd' if platform.system() == 'Windows' else ''}\" instead of \"cosmotop.exe\". "
+                                 "Please update any scripts and/or @scrypted/x11-camera accordingly.")
+                self.migration_from_cosmotop_exe_alerted = True
+        asyncio.create_task(alert_migration())
+
+    @property
+    def migration_from_cosmotop_exe_alerted(self) -> bool:
+        try:
+            alerted = self.storage.getItem('migration_from_cosmotop_exe_alerted')
+            return bool(alerted)
+        except Exception:
+            return False
+    @migration_from_cosmotop_exe_alerted.setter
+    def migration_from_cosmotop_exe_alerted(self, value: bool) -> None:
+        try:
+            self.storage.setItem('migration_from_cosmotop_exe_alerted', value)
+        except Exception as e:
+            pass
+
     async def alert(self, msg) -> None:
         logger = await scrypted_sdk.systemManager.api.getLogger(self.nativeId)
         await logger.log("a", msg)
@@ -256,7 +277,7 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
             {
                 "key": "cosmotop_executable",
                 "title": "cosmotop Path",
-                "description": "Path to the downloaded cosmotop.",
+                "description": f"Path to the downloaded cosmotop{'.cmd' if platform.system() == 'Windows' else ''} executable.",
                 "value": self.exe,
                 "readonly": True,
             },
