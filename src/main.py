@@ -7,6 +7,8 @@ import shutil
 from typing import Any, AsyncGenerator, Callable
 import urllib.request
 
+import jinja2
+
 import scrypted_sdk
 from scrypted_sdk import ScryptedDeviceBase, DeviceProvider, StreamService, TTYSettings, ScryptedDeviceType, ScryptedInterface, Settings, Setting, Readme, Scriptable, ScriptSource
 
@@ -54,13 +56,14 @@ def name_hash(name):
 class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSettings, Settings):
     LOG_FILE = os.path.expanduser(f'~/.config/cosmotop/cosmotop.log')
 
-    def __init__(self, nativeId: str = None, cluster_parent: 'CosmotopPlugin' = None) -> None:
+    def __init__(self, nativeId: str = None, cluster_parent: 'CosmotopPlugin' = None, node_name: str = None) -> None:
         super().__init__(nativeId)
 
         self.downloaded = asyncio.ensure_future(self.do_download())
         self.log_loop = asyncio.create_task(self.tail_log_loop())
 
         self.cluster_parent = cluster_parent
+        self.node_name = node_name
         if not cluster_parent:
             self.discovered = asyncio.ensure_future(self.do_device_discovery())
             self.cluster_workers = {}
@@ -229,7 +232,7 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
 
                 fork = scrypted_sdk.fork({ 'clusterWorkerId': worker_id })
                 result = await fork.result
-                self.cluster_workers[stable_id] = await result.newCosmotopPlugin(stable_id, self)
+                self.cluster_workers[stable_id] = await result.newCosmotopPlugin(stable_id, self, worker['name'])
 
     async def tail_log_loop(self):
         await self.downloaded
