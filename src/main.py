@@ -232,7 +232,8 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
 
                 fork = scrypted_sdk.fork({ 'clusterWorkerId': worker_id })
                 result = await fork.result
-                self.cluster_workers[stable_id] = await result.newCosmotopPlugin(stable_id, self, worker['name'])
+                connected_worker = await result.newCosmotopPlugin(stable_id, self, worker['name'])
+                self.cluster_workers[stable_id] = await scrypted_sdk.sdk.connectRPCObject(connected_worker)
 
     async def tail_log_loop(self):
         await self.downloaded
@@ -547,8 +548,8 @@ def create_scrypted_plugin():
 
 
 class CosmotopForkEntry:
-    async def newCosmotopPlugin(self, nativeId: str = None, cluster_parent: CosmotopPlugin = None):
-        return CosmotopPlugin(nativeId=nativeId, cluster_parent=cluster_parent)
+    async def newCosmotopPlugin(self, nativeId: str = None, cluster_parent: CosmotopPlugin = None, node_name: str = None):
+        return CosmotopPlugin(nativeId=nativeId, cluster_parent=cluster_parent, node_name=node_name)
 
 
 async def fork():
