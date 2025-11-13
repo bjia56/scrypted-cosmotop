@@ -417,6 +417,14 @@ class CosmotopConfig(ScryptedDeviceBase, Scriptable, Readme):
         return f"""
 # `cosmotop` Configuration
 
+This device allows editing the `cosmotop` configuration file used by the `cosmotop` monitoring interface.
+Clearing the configuration will reset it to the default configuration.
+
+## Special template variables
+
+The configuration file is treated as a Jinja2 template, allowing the use of special variables.
+- `{{{{ node }}}}`: The name of the node (worker) this instance is running on. Empty for the main server instance.
+
 ## Available themes
 
 Additional themes can be downloaded from the theme manager page.
