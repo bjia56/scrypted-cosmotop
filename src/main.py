@@ -72,26 +72,14 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
         self.config = CosmotopConfig("config", self)
         self.thememanager = CosmotopThemeManager("thememanager", self)
 
-        async def alert_migration():
-            if not cluster_parent and not self.migration_from_cosmotop_exe_alerted:
-                await self.alert(f"The cosmotop executable is now downloaded as \"cosmotop{'.cmd' if platform.system() == 'Windows' else ''}\" instead of \"cosmotop.exe\". "
-                                 "Please update any scripts and/or @scrypted/x11-camera accordingly.")
-                self.migration_from_cosmotop_exe_alerted = True
-        asyncio.create_task(alert_migration())
-
-    @property
-    def migration_from_cosmotop_exe_alerted(self) -> bool:
-        try:
-            alerted = self.storage.getItem('migration_from_cosmotop_exe_alerted')
-            return bool(alerted)
-        except Exception:
-            return False
-    @migration_from_cosmotop_exe_alerted.setter
-    def migration_from_cosmotop_exe_alerted(self, value: bool) -> None:
-        try:
-            self.storage.setItem('migration_from_cosmotop_exe_alerted', value)
-        except Exception as e:
-            pass
+        async def cleanup_alert_migration():
+            try:
+                alerted = self.storage.getItem('migration_from_cosmotop_exe_alerted')
+                if alerted:
+                    self.storage.removeItem('migration_from_cosmotop_exe_alerted')
+            except Exception:
+                pass
+        asyncio.create_task(cleanup_alert_migration())
 
     async def alert(self, msg) -> None:
         logger = await scrypted_sdk.systemManager.api.getLogger(self.nativeId)
@@ -335,21 +323,28 @@ class CosmotopConfig(ScryptedDeviceBase, Scriptable, Readme):
             with open(CosmotopConfig.CONFIG_PATH) as f:
                 data = f.read()
 
+            # Helper to render the config template
+            def render_config_template(template: str) -> str:
+                template = jinja2.Template(template)
+                return template.render(node=self.parent.node_name)
+
             if self.cluster_parent_config is not None:
+                # Worker path
                 cluster_parent_config = await self.cluster_parent_config
-                if data != await cluster_parent_config.get_config():
+                rendered_config = render_config_template(await cluster_parent_config.get_config())
+                if data != rendered_config:
                     with open(CosmotopConfig.CONFIG_PATH, 'w') as f:
-                        f.write(await cluster_parent_config.get_config())
+                        f.write(rendered_config)
             else:
+                # Server path
                 while self.storage is None:
                     await asyncio.sleep(1)
 
-                if self.storage.getItem('config') and data != await self.get_config():
-                    with open(CosmotopConfig.CONFIG_PATH, 'w') as f:
-                        f.write(await self.get_config())
+                rendered_config = render_config_template(await self.get_config())
 
-                if not self.storage.getItem('config'):
-                    self.storage.setItem('config', data)
+                if self.storage.getItem('config') and data != rendered_config:
+                    with open(CosmotopConfig.CONFIG_PATH, 'w') as f:
+                        f.write(rendered_config)
 
                 self.print(f"Using themes dir: {CosmotopConfig.HOME_THEMES_DIR}")
                 if platform.system() == 'Windows':
@@ -382,7 +377,13 @@ class CosmotopConfig(ScryptedDeviceBase, Scriptable, Readme):
         if self.cluster_parent_config is not None:
             return await (await self.cluster_parent_config).get_config()
         if self.storage:
-            return self.storage.getItem('config') or await self.default_config
+            cfg = self.storage.getItem('config')
+            if cfg:
+                return cfg
+            else:
+                cfg = await self.default_config
+                self.storage.setItem('config', cfg)
+                return cfg
         return await self.default_config
 
     # should only be called on the primary plugin instance
@@ -407,21 +408,8 @@ class CosmotopConfig(ScryptedDeviceBase, Scriptable, Readme):
 
         self.storage.setItem('config', script['script'])
         await self.onDeviceEvent(ScryptedInterface.Scriptable.value, None)
-
-        updated = False
-        with open(CosmotopConfig.CONFIG_PATH) as f:
-            if f.read() != script['script']:
-                updated = True
-
-        if updated:
-            if not script['script']:
-                os.remove(CosmotopConfig.CONFIG_PATH)
-            else:
-                with open(CosmotopConfig.CONFIG_PATH, 'w') as f:
-                    f.write(script['script'])
-
-            self.print("Configuration updated, will restart...")
-            await scrypted_sdk.deviceManager.requestRestart()
+        self.print("Configuration updated, will restart...")
+        await scrypted_sdk.deviceManager.requestRestart()
 
     # should only be called on the primary plugin instance
     async def getReadmeMarkdown(self) -> str:
