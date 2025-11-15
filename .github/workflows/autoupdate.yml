@@ -33,14 +33,14 @@ jobs:
           # Get all release tags from upstream
           curl -s -H "Authorization: Bearer ${{ github.token }}" \
             "https://api.github.com/repos/bjia56/cosmotop/releases" \
-            | jq -r '.[].tag_name' > all_tags.txt
+            | jq -r '.[].tag_name' > /tmp/all_tags.txt
 
           # Call the extracted Python script
-          python3 scripts/find_latest_version.py all_tags.txt > version_output.txt
+          python3 scripts/find_latest_version.py /tmp/all_tags.txt > /tmp/version_output.txt
 
           # Parse the key=value output
-          LATEST=$(grep '^LATEST=' version_output.txt | cut -d= -f2-)
-          IS_BETA=$(grep '^IS_BETA=' version_output.txt | cut -d= -f2-)
+          LATEST=$(grep '^LATEST=' /tmp/version_output.txt | cut -d= -f2-)
+          IS_BETA=$(grep '^IS_BETA=' /tmp/version_output.txt | cut -d= -f2-)
 
           echo "current=${CURRENT}" >> "$GITHUB_ENV"
           echo "latest=${LATEST}" >> "$GITHUB_ENV"
