@@ -63,6 +63,8 @@ jobs:
           git add fs/cosmotop.json
           git commit -m "Update cosmotop to ${{ env.latest }}"
 
+          git status
+
           npm i
           npm version patch
           npm publish ${{ env.is_beta == 'true' && '--tag beta' || '' }}
