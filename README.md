@@ -15,7 +15,7 @@ The Configuration device under this plugin provides a handy way to view and edit
 Monitoring of GPUs is supported on Linux and Windows.
 - Windows: LibreHardwareMonitor is included with `cosmotop` and automatically used to fetch GPU information.
 - Linux: Intel, AMD, and NVIDIA GPUs are supported, provided the appropriate driver is installed, and the following:
-  - Intel: The simplest setup is to run Scrypted as root (if using a local install) or in a privileged container (if using Docker or LXC), however this is <u>*insecure and not recommended*</u>. Instead, run [intel-gpu-exporter](https://github.com/bjia56/intel-gpu-exporter) in a privileged Docker container, then set the `intel_gpu_exporter` configuration option in `cosmotop` to the exporter's HTTP endpoint.
+  - Intel: The simplest setup is to run Scrypted as root (if using a local install) or in a privileged container (if using Docker or LXC), however this is <u>*insecure and not recommended*</u>. Instead, run [intel-gpu-exporter](https://github.com/bjia56/intel-gpu-exporter) in a privileged Docker container and use the Prometheus monitoring instructions below.
   - AMD: Should work out of the box.
   - NVIDIA: `libnvidia-ml.so` must be accessible by Scrypted.
 
@@ -26,6 +26,18 @@ Utilization monitoring of Intel and Rockchip NPUs is supported on Linux, provide
 - Rockchip: The path `/sys/kernel/debug/rknpu` must be readable by Scrypted.
 
 The Apple Neural Engine on M series Macs is supported and detected as an NPU.
+
+### Monitoring via Prometheus ingestion
+
+`cosmotop` supports polling an HTTP Prometheus client endpoint to read GPU and NPU metrics data. The `prometheus_endpoint` configuration key should be set to the HTTP endpoint which publishes the metrics.
+
+Some options for exporters:
+- (Linux) [intel-gpu-exporter](https://github.com/bjia56/intel-gpu-exporter): Set the following `cosmotop` configuration keys:
+  - `prometheus_mapping`: `"gpu_utilization_percent:igpu_engines_busy_max,gpu_frequency:igpu_frequency_actual,gpu_power_usage:igpu_power_gpu"`
+  - `prometheus_settings`: `"gpu_frequency_unit:mhz,gpu_power_unit:w"`
+- (MacOS) [macmon-prometheus-exporter](https://github.com/DMontgomery40/macmon-prometheus-exporter): Set the following `cosmotop` configuration keys:
+  - `prometheus_mapping`: `"gpu_utilization_percent:mac_gpu_usage_percent,gpu_frequency:mac_gpu_frequency_mhz,gpu_power_usage:mac_gpu_power_watts,gpu_temperature:mac_gpu_temperature_celsius,npu_utilization_percent:mac_ane_usage_percent"`
+  - `prometheus_settings`: `"gpu_frequency_unit:mhz,gpu_power_unit:w,gpu_temperature_unit:c"`
 
 ### Themes
 
