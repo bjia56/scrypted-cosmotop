@@ -65,7 +65,7 @@ jobs:
 
           git status
 
-          npm i
+          npm ci
           npm version patch
           npm publish ${{ env.is_beta == 'true' && '--tag beta' || '' }}
 
