@@ -4,7 +4,7 @@ import json
 import os
 import platform
 import shutil
-from typing import Any, AsyncGenerator, Callable
+from typing import Any, AsyncGenerator, Callable, TypedDict
 import urllib.request
 
 import jinja2
@@ -53,6 +53,11 @@ def name_hash(name):
     return hashlib.sha1(name.encode()).hexdigest()
 
 
+class Worker(TypedDict):
+    worker: ScryptedDeviceBase
+    terminate: Callable[[], None]
+
+
 class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSettings, Settings):
     LOG_FILE = os.path.expanduser(f'~/.config/cosmotop/cosmotop.log')
 
@@ -66,8 +71,8 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
         self.node_name = node_name
         if not cluster_parent:
             self.discovered = asyncio.ensure_future(self.do_device_discovery())
-            self.cluster_workers = {}
-            self.cluster_worker_ids = {}
+            self.cluster_workers: dict[str, Worker] = {} # stable_id -> Worker
+            self.cluster_worker_ids: dict[str, str] = {} # stable_id -> worker_id
 
         self.config = CosmotopConfig("config", self)
         self.thememanager = CosmotopThemeManager("thememanager", self)
@@ -150,8 +155,12 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
             traceback.print_exc()
             raise
 
-    async def do_device_discovery(self) -> None:
+    async def do_device_discovery(self, delay=0) -> None:
         await self.downloaded
+
+        if delay:
+            await asyncio.sleep(delay)
+
         devices = [
             {
                 "nativeId": "config",
@@ -173,6 +182,9 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
             }
         ]
 
+        cluster_workers = {}
+        cluster_worker_ids = {}
+
         if scrypted_sdk.clusterManager:
             workers = await scrypted_sdk.clusterManager.getClusterWorkers()
             for worker_id in list(workers.keys()):
@@ -183,11 +195,11 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
                 stable_id_base = name_hash(worker['name']) # the worker id could change, so treat the name as stable
                 stable_id = stable_id_base
                 ctr = 1
-                while stable_id in self.cluster_worker_ids:
+                while stable_id in cluster_worker_ids:
                     stable_id = f"{stable_id_base}-{ctr}"
                     ctr += 1
 
-                self.cluster_worker_ids[stable_id] = worker_id
+                cluster_worker_ids[stable_id] = worker_id
 
                 devices.append({
                     "nativeId": stable_id,
@@ -213,15 +225,21 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
 
                 # get the stable id from the map
                 stable_id = None
-                for k, v in self.cluster_worker_ids.items():
+                for k, v in cluster_worker_ids.items():
                     if v == worker_id:
                         stable_id = k
                         break
 
                 fork = scrypted_sdk.fork({ 'clusterWorkerId': worker_id })
+                terminate = lambda: fork.terminate()
                 result = await fork.result
                 connected_worker = await result.newCosmotopPlugin(stable_id, self, worker['name'])
-                self.cluster_workers[stable_id] = await scrypted_sdk.sdk.connectRPCObject(connected_worker)
+                cluster_workers[stable_id] = Worker(worker=await scrypted_sdk.sdk.connectRPCObject(connected_worker), terminate=terminate)
+
+        self.cluster_workers = cluster_workers
+        self.cluster_worker_ids = cluster_worker_ids
+
+        asyncio.create_task(self.do_device_discovery(delay=60))
 
     async def tail_log_loop(self):
         await self.downloaded
@@ -238,7 +256,7 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
             return self.thememanager
 
         if nativeId in self.cluster_workers:
-            return self.cluster_workers[nativeId]
+            return self.cluster_workers[nativeId]["worker"]
 
         # Management ui v2's PtyComponent expects the plugin device to implement
         # DeviceProvider and return the StreamService device via getDevice.
