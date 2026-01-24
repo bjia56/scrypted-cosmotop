@@ -4,6 +4,7 @@ import json
 import os
 import platform
 import shutil
+import traceback
 from typing import Any, AsyncGenerator, Callable, TypedDict
 import urllib.request
 
@@ -185,61 +186,64 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
         cluster_workers = {}
         cluster_worker_ids = {}
 
-        if scrypted_sdk.clusterManager:
-            workers = await scrypted_sdk.clusterManager.getClusterWorkers()
-            for worker_id in list(workers.keys()):
-                worker = workers[worker_id]
-                if worker['mode'] == 'server':
-                    continue
+        try:
+            if scrypted_sdk.clusterManager:
+                workers = await scrypted_sdk.clusterManager.getClusterWorkers()
+                for worker_id in list(workers.keys()):
+                    worker = workers[worker_id]
+                    if worker['mode'] == 'server':
+                        continue
 
-                stable_id_base = name_hash(worker['name']) # the worker id could change, so treat the name as stable
-                stable_id = stable_id_base
-                ctr = 1
-                while stable_id in cluster_worker_ids:
-                    stable_id = f"{stable_id_base}-{ctr}"
-                    ctr += 1
+                    stable_id_base = name_hash(worker['name']) # the worker id could change, so treat the name as stable
+                    stable_id = stable_id_base
+                    ctr = 1
+                    while stable_id in cluster_worker_ids:
+                        stable_id = f"{stable_id_base}-{ctr}"
+                        ctr += 1
 
-                cluster_worker_ids[stable_id] = worker_id
+                    cluster_worker_ids[stable_id] = worker_id
 
-                devices.append({
-                    "nativeId": stable_id,
-                    "name": "cosmotop on " + worker['name'],
-                    "type": ScryptedDeviceType.API.value,
-                    "interfaces": [
-                        ScryptedInterface.StreamService.value,
-                        ScryptedInterface.TTY.value,
-                        ScryptedInterface.Settings.value,
-                    ],
-                })
+                    devices.append({
+                        "nativeId": stable_id,
+                        "name": "cosmotop on " + worker['name'],
+                        "type": ScryptedDeviceType.API.value,
+                        "interfaces": [
+                            ScryptedInterface.StreamService.value,
+                            ScryptedInterface.TTY.value,
+                            ScryptedInterface.Settings.value,
+                        ],
+                    })
 
-        await scrypted_sdk.deviceManager.onDevicesChanged({
-            "devices": devices,
-            "providerNativeId": self.nativeId,
-        })
+            await scrypted_sdk.deviceManager.onDevicesChanged({
+                "devices": devices,
+                "providerNativeId": self.nativeId,
+            })
 
-        if scrypted_sdk.clusterManager:
-            for worker_id in list(workers.keys()):
-                worker = workers[worker_id]
-                if worker['mode'] == 'server':
-                    continue
+            if scrypted_sdk.clusterManager:
+                for worker_id in list(workers.keys()):
+                    worker = workers[worker_id]
+                    if worker['mode'] == 'server':
+                        continue
 
-                # get the stable id from the map
-                stable_id = None
-                for k, v in cluster_worker_ids.items():
-                    if v == worker_id:
-                        stable_id = k
-                        break
+                    # get the stable id from the map
+                    stable_id = None
+                    for k, v in cluster_worker_ids.items():
+                        if v == worker_id:
+                            stable_id = k
+                            break
 
-                fork = scrypted_sdk.fork({ 'clusterWorkerId': worker_id })
-                terminate = lambda: fork.terminate()
-                result = await fork.result
-                connected_worker = await result.newCosmotopPlugin(stable_id, self, worker['name'])
-                cluster_workers[stable_id] = Worker(worker=await scrypted_sdk.sdk.connectRPCObject(connected_worker), terminate=terminate)
+                    fork = scrypted_sdk.fork({ 'clusterWorkerId': worker_id })
+                    terminate = lambda: fork.terminate()
+                    result = await fork.result
+                    connected_worker = await result.newCosmotopPlugin(stable_id, self, worker['name'])
+                    cluster_workers[stable_id] = Worker(worker=await scrypted_sdk.sdk.connectRPCObject(connected_worker), terminate=terminate)
 
-        self.cluster_workers = cluster_workers
-        self.cluster_worker_ids = cluster_worker_ids
-
-        asyncio.create_task(self.do_device_discovery(delay=60))
+            self.cluster_workers = cluster_workers
+            self.cluster_worker_ids = cluster_worker_ids
+        except:
+            traceback.print_exc()
+        finally:
+            asyncio.create_task(self.do_device_discovery(delay=60))
 
     async def tail_log_loop(self):
         await self.downloaded
