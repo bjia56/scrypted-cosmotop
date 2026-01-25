@@ -11,7 +11,7 @@ import urllib.request
 import jinja2
 
 import scrypted_sdk
-from scrypted_sdk import ScryptedDeviceBase, DeviceProvider, StreamService, TTYSettings, ScryptedDeviceType, ScryptedInterface, Settings, Setting, Readme, Scriptable, ScriptSource
+from scrypted_sdk import ScryptedDeviceBase, DeviceProvider, StreamService, TTYSettings, ScryptedDeviceType, ScryptedInterface, PluginFork, Settings, Setting, Readme, Scriptable, ScriptSource
 
 
 VERSON_JSON = open(os.path.join(os.environ['SCRYPTED_PLUGIN_VOLUME'], 'zip', 'unzipped', 'fs', 'cosmotop.json')).read()
@@ -55,8 +55,8 @@ def name_hash(name):
 
 
 class Worker(TypedDict):
+    fork: PluginFork
     worker: ScryptedDeviceBase
-    terminate: Callable[[], None]
 
 
 class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSettings, Settings):
@@ -232,11 +232,24 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
                             stable_id = k
                             break
 
+                    # check if we already have this worker
+                    if stable_id in self.cluster_workers:
+                        worker = self.cluster_workers[stable_id]
+                        # check if the worker is still alive
+                        if not worker["fork"].exit.done():
+                            cluster_workers[stable_id] = worker
+                            continue
+
                     fork = scrypted_sdk.fork({ 'clusterWorkerId': worker_id })
-                    terminate = lambda: fork.terminate()
                     result = await fork.result
                     connected_worker = await result.newCosmotopPlugin(stable_id, self, worker['name'])
-                    cluster_workers[stable_id] = Worker(worker=await scrypted_sdk.sdk.connectRPCObject(connected_worker), terminate=terminate)
+                    cluster_workers[stable_id] = Worker(worker=await scrypted_sdk.sdk.connectRPCObject(connected_worker), fork=fork)
+
+                # for workers that have disappeared, clean them up
+                for stable_id in list(self.cluster_workers.keys()):
+                    if stable_id not in cluster_workers:
+                        worker = self.cluster_workers[stable_id]
+                        worker["fork"].terminate()
 
             self.cluster_workers = cluster_workers
             self.cluster_worker_ids = cluster_worker_ids
