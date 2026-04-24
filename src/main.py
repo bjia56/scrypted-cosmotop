@@ -74,6 +74,7 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
             self.discovered = asyncio.ensure_future(self.do_device_discovery())
             self.cluster_workers: dict[str, Worker] = {} # stable_id -> Worker
             self.cluster_worker_ids: dict[str, str] = {} # stable_id -> worker_id
+            self.restart_loop = asyncio.create_task(self.do_periodic_restart())
 
         self.config = CosmotopConfig("config", self)
         self.thememanager = CosmotopThemeManager("thememanager", self)
@@ -257,6 +258,11 @@ class CosmotopPlugin(ScryptedDeviceBase, StreamService, DeviceProvider, TTYSetti
             traceback.print_exc()
         finally:
             asyncio.create_task(self.do_device_discovery(delay=60))
+
+    async def do_periodic_restart(self) -> None:
+        await asyncio.sleep(3600)
+        self.print("Performing scheduled hourly restart...")
+        await scrypted_sdk.deviceManager.requestRestart()
 
     async def tail_log_loop(self):
         await self.downloaded
